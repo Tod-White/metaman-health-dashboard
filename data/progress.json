@@ -1,0 +1,15 @@
+{
+  "2026-04-04": {
+    "completed": ["morning", "midmorning", "noon"],
+    "skipped": ["afternoon", "evening", "bedtime"],
+    "metrics": {
+      "ankle_mobility": 6,
+      "ankle_stability": 25,
+      "weight_balance": 5,
+      "hip_stability": 4,
+      "lower_back_tension": 7,
+      "shoulder_pain": 6
+    },
+    "notes": "右脚踝明显松了一点，但重心右移还是不习惯。左腰紧张有所缓解。今天发现了完整的因果链：右脚踝→重心左移→右髋游离→左腰紧张→右肩疼痛。"
+  }
+}

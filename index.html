@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🦞 Metaman 康复日历</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🦞 Metaman 康复日历</h1>
+            <p class="subtitle">右脚踝 → 重心 → 右髋 → 肩颈 | 标本兼治</p>
+        </header>
+
+        <!-- 日历视图 -->
+        <section class="calendar-section">
+            <div class="calendar-header">
+                <button id="prevMonth">◀</button>
+                <h2 id="currentMonth">2026年4月</h2>
+                <button id="nextMonth">▶</button>
+            </div>
+            <div class="calendar-grid" id="calendarGrid">
+                <!-- 动态生成 -->
+            </div>
+        </section>
+
+        <!-- 今日任务 -->
+        <section class="today-section">
+            <h2>✅ 今日任务 <span id="todayDate"></span></h2>
+            <div class="task-list" id="taskList">
+                <div class="task completed">
+                    <span class="time">08:00</span>
+                    <span class="name">早晨康复训练</span>
+                    <span class="duration">15分钟</span>
+                    <span class="status">✓</span>
+                </div>
+                <div class="task completed">
+                    <span class="time">10:30</span>
+                    <span class="name">上午肩颈放松</span>
+                    <span class="duration">10分钟</span>
+                    <span class="status">✓</span>
+                </div>
+                <div class="task completed">
+                    <span class="time">13:00</span>
+                    <span class="name">中午综合训练</span>
+                    <span class="duration">15分钟</span>
+                    <span class="status">✓</span>
+                </div>
+                <div class="task pending">
+                    <span class="time">15:30</span>
+                    <span class="name">下午肩颈急救</span>
+                    <span class="duration">10分钟</span>
+                    <span class="status">⏳</span>
+                </div>
+                <div class="task pending">
+                    <span class="time">18:30</span>
+                    <span class="name">傍晚综合训练</span>
+                    <span class="duration">20分钟</span>
+                    <span class="status">⏳</span>
+                </div>
+                <div class="task pending">
+                    <span class="time">22:45</span>
+                    <span class="name">睡前放松</span>
+                    <span class="duration">15分钟</span>
+                    <span class="status">⏳</span>
+                </div>
+            </div>
+            <div class="task-summary">
+                <span>完成率：<strong id="completionRate">50%</strong></span>
+                <span>总时长：<strong id="totalDuration">40/85分钟</strong></span>
+            </div>
+        </section>
+
+        <!-- 效果趋势 -->
+        <section class="chart-section">
+            <h2>📊 效果趋势（最近4周）</h2>
+            <canvas id="progressChart"></canvas>
+            <div class="metrics-legend">
+                <div class="metric">
+                    <span class="dot" style="background: #4CAF50;"></span>
+                    <span>右脚踝活动度</span>
+                </div>
+                <div class="metric">
+                    <span class="dot" style="background: #2196F3;"></span>
+                    <span>右脚单腿站稳定性(秒)</span>
+                </div>
+                <div class="metric">
+                    <span class="dot" style="background: #FF9800;"></span>
+                    <span>右脚承重感</span>
+                </div>
+                <div class="metric">
+                    <span class="dot" style="background: #9C27B0;"></span>
+                    <span>右髋游离感(反向)</span>
+                </div>
+                <div class="metric">
+                    <span class="dot" style="background: #F44336;"></span>
+                    <span>左腰紧张(反向)</span>
+                </div>
+                <div class="metric">
+                    <span class="dot" style="background: #E91E63;"></span>
+                    <span>右肩疼痛(反向)</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- 今日笔记 -->
+        <section class="notes-section">
+            <h2>📝 今日笔记</h2>
+            <textarea id="todayNotes" placeholder="记录今天的身体反馈、训练感受、新发现..."></textarea>
+            <div class="metrics-input">
+                <h3>每周指标记录（1-10分）</h3>
+                <div class="metrics-grid">
+                    <div class="metric-input">
+                        <label>右脚踝活动度</label>
+                        <input type="number" id="ankle_mobility" min="1" max="10" value="5">
+                    </div>
+                    <div class="metric-input">
+                        <label>右脚单腿站(秒)</label>
+                        <input type="number" id="ankle_stability" min="0" max="60" value="20">
+                    </div>
+                    <div class="metric-input">
+                        <label>右脚承重感</label>
+                        <input type="number" id="weight_balance" min="1" max="10" value="5">
+                    </div>
+                    <div class="metric-input">
+                        <label>右髋游离感</label>
+                        <input type="number" id="hip_stability" min="1" max="10" value="5">
+                    </div>
+                    <div class="metric-input">
+                        <label>左腰紧张</label>
+                        <input type="number" id="lower_back_tension" min="1" max="10" value="5">
+                    </div>
+                    <div class="metric-input">
+                        <label>右肩疼痛</label>
+                        <input type="number" id="shoulder_pain" min="1" max="10" value="5">
+                    </div>
+                </div>
+            </div>
+            <button id="saveBtn" class="save-btn">💾 保存今日记录</button>
+        </section>
+
+        <!-- 历史记录 -->
+        <section class="history-section">
+            <h2>📅 历史记录</h2>
+            <div id="historyList" class="history-list">
+                <!-- 动态生成 -->
+            </div>
+        </section>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
