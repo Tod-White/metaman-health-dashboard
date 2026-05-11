@@ -1,384 +1,722 @@
 // 数据存储
+const DATA_VERSION = 3;
 let progressData = {};
 let currentMonth = new Date();
+let progressChart = null;
+window.progressChart = null;
+let currentRangeDays = 7;
+
+const TASKS = [
+    { key: 'morning', label: '早晨重排', minutes: 20 },
+    { key: 'noon', label: '中午校正', minutes: 8 },
+    { key: 'evening', label: '晚间重排', minutes: 15 },
+    { key: 'bedtime', label: '睡前记录', minutes: 2 }
+];
+
+const SCORE_WEIGHTS = [0.3, 0.3, 0.3, 0.3, 4.0, 4.0, 4.0, 4.0, 0.3, 0.3];
+const SCORE_BREAKS = buildScoreBreaks();
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     loadData();
-    renderCalendar();
+    bindRangeTabs();
     renderTodayTasks();
-    renderChart();
-    renderHistory();
-    
-    // 事件监听
-    document.getElementById('prevMonth').addEventListener('click', () => {
-        currentMonth.setMonth(currentMonth.getMonth() - 1);
-        renderCalendar();
-    });
-    
-    document.getElementById('nextMonth').addEventListener('click', () => {
-        currentMonth.setMonth(currentMonth.getMonth() + 1);
-        renderCalendar();
-    });
-    
-    document.getElementById('saveBtn').addEventListener('click', saveToday);
+    renderChart(currentRangeDays);
+    updateCurrentDate();
 });
 
-// 加载数据
-function loadData() {
-    const stored = localStorage.getItem('healthProgress');
-    if (stored) {
-        progressData = JSON.parse(stored);
-    } else {
-        // 初始化示例数据
-        progressData = {
-            '2026-04-04': {
-                completed: ['morning', 'midmorning', 'noon'],
-                skipped: ['afternoon', 'evening', 'bedtime'],
-                metrics: {
-                    ankle_mobility: 6,
-                    ankle_stability: 25,
-                    weight_balance: 5,
-                    hip_stability: 4,
-                    lower_back_tension: 7,
-                    shoulder_pain: 6
-                },
-                notes: '右脚踝明显松了一点，但重心右移还是不习惯。左腰紧张有所缓解。'
-            }
-        };
+function buildScoreBreaks() {
+    const total = SCORE_WEIGHTS.reduce((sum, v) => sum + v, 0);
+    const breaks = [0];
+    let acc = 0;
+    for (const weight of SCORE_WEIGHTS) {
+        acc += weight;
+        breaks.push(acc / total);
     }
+    return breaks;
 }
 
-// 保存数据
-function saveData() {
-    localStorage.setItem('healthProgress', JSON.stringify(progressData));
-}
-
-// 渲染日历
-function renderCalendar() {
-    const grid = document.getElementById('calendarGrid');
-    const monthTitle = document.getElementById('currentMonth');
-    
-    const year = currentMonth.getFullYear();
-    const month = currentMonth.getMonth();
-    
-    monthTitle.textContent = `${year}年${month + 1}月`;
-    
-    // 清空
-    grid.innerHTML = '';
-    
-    // 添加星期标题
-    const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
-    weekdays.forEach(day => {
-        const header = document.createElement('div');
-        header.style.textAlign = 'center';
-        header.style.fontWeight = 'bold';
-        header.style.padding = '10px';
-        header.textContent = day;
-        grid.appendChild(header);
+function bindRangeTabs() {
+    const tabs = document.querySelectorAll('.range-tab');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(btn => btn.classList.remove('active'));
+            tab.classList.add('active');
+            currentRangeDays = Number(tab.dataset.range || '7');
+            localStorage.setItem('healthUiRangeDays', String(currentRangeDays));
+            renderChart(currentRangeDays);
+        });
     });
-    
-    // 获取当月第一天和最后一天
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    
-    // 填充空白
-    for (let i = 0; i < firstDay.getDay(); i++) {
-        grid.appendChild(document.createElement('div'));
-    }
-    
-    // 填充日期
-    const today = new Date();
-    for (let day = 1; day <= lastDay.getDate(); day++) {
-        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const dayData = progressData[dateStr];
-        
-        const dayEl = document.createElement('div');
-        dayEl.className = 'calendar-day';
-        
-        // 判断是否是今天
-        if (year === today.getFullYear() && month === today.getMonth() && day === today.getDate()) {
-            dayEl.classList.add('today');
-        }
-        
-        // 判断完成状态
-        if (dayData) {
-            const completionRate = dayData.completed.length / 6;
-            if (completionRate === 1) {
-                dayEl.classList.add('completed');
-            } else if (completionRate > 0) {
-                dayEl.classList.add('partial');
-            }
-            
-            dayEl.innerHTML = `
-                <span class="date">${day}</span>
-                <span class="completion">${dayData.completed.length}/6</span>
-            `;
-        } else {
-            dayEl.innerHTML = `<span class="date">${day}</span>`;
-        }
-        
-        dayEl.addEventListener('click', () => showDayDetail(dateStr));
-        grid.appendChild(dayEl);
+
+    const savedRange = Number(localStorage.getItem('healthUiRangeDays') || '7');
+    if ([7, 30, 90].includes(savedRange)) {
+        currentRangeDays = savedRange;
+        tabs.forEach(btn => btn.classList.toggle('active', Number(btn.dataset.range) === savedRange));
     }
 }
 
-// 渲染今日任务
+function loadData() {
+    const defaultData = {
+        '2026-04-04': {
+            completed: ['morning', 'noon', 'evening', 'bedtime'],
+            skipped: [],
+            metrics: {
+                body_feel: 4.3,
+                completion: 8,
+                habit_guard: 6
+            },
+            notes: '第一天执行较完整，身体有改善，但成果还谈不上稳稳守住。',
+            title: '',
+            observation: ''
+        },
+        '2026-04-05': {
+            completed: ['morning', 'noon', 'evening', 'bedtime'],
+            skipped: [],
+            metrics: {
+                body_feel: 4.05,
+                completion: 7,
+                habit_guard: 5.5
+            },
+            notes: '整体体感和前一天接近，完成度略低，脚受力问题开始更清楚，但白天习惯控制还不强。',
+            title: '',
+            observation: ''
+        },
+        '2026-04-06': {
+            completed: ['bedtime'],
+            skipped: ['morning', 'noon', 'evening'],
+            metrics: {
+                body_feel: 5.05,
+                completion: 5,
+                habit_guard: 4.5
+            },
+            notes: '旧崴脚、前脚掌偏载、抬脚困难的代偿链更明确，虽然体感略好，但成果很容易在白天流失。',
+            title: '',
+            observation: ''
+        },
+        '2026-04-07': {
+            completed: ['bedtime'],
+            skipped: ['morning', 'noon', 'evening'],
+            metrics: {
+                body_feel: 5.55,
+                completion: 8,
+                habit_guard: 5.5
+            },
+            notes: '完成度不错，整体体感继续抬高，但右脚后跟/前脚掌和小腿代偿仍说明成果守住得一般。',
+            title: '',
+            observation: ''
+        },
+        '2026-04-08': {
+            metrics: {
+                body_feel: 5.7,
+                completion: 7.5,
+                habit_guard: 5.75
+            },
+            notes: '趋势补录：介于 04-07 与 04-09 之间，体感继续小幅上行，完成度维持较高，成果守住度略有改善。',
+            title: '',
+            observation: ''
+        },
+        '2026-04-09': {
+            completed: ['bedtime'],
+            skipped: ['morning', 'noon', 'evening'],
+            metrics: {
+                body_feel: 5.9,
+                completion: 7,
+                habit_guard: 6
+            },
+            notes: '整体体感已到 6 分以上，但当天主要是睡前评分，不算完整训练日，成果守住度给中上。',
+            title: '',
+            observation: ''
+        },
+        '2026-04-10': {
+            metrics: {
+                body_feel: 5.8,
+                completion: 7,
+                habit_guard: 6.5
+            },
+            notes: '无',
+            title: '',
+            observation: ''
+        },
+        '2026-04-11': {
+            metrics: {
+                body_feel: 5.8,
+                completion: 7,
+                habit_guard: 6
+            },
+            notes: '今天走路时间有点长，的时候给越走越回去，发力又不对了，全身也紧张，这感觉很不好',
+            title: '',
+            observation: ''
+        },
+        '2026-04-12': {
+            metrics: {
+                body_feel: 4.8,
+                completion: 7,
+                habit_guard: 5.5
+            },
+            notes: '无',
+            title: '',
+            observation: ''
+        },
+        '2026-04-13': {
+            metrics: {
+                body_feel: 6.3,
+                completion: 8,
+                habit_guard: 7
+            },
+            notes: '整体体感 6.5，完成度给自己八分，成果守住都可以给气氛。',
+            title: '',
+            observation: ''
+        },
+        '2026-04-14': {
+            metrics: {
+                body_feel: 5.8,
+                completion: 7.5,
+                habit_guard: 6.6
+            },
+            notes: '似乎我这两天的颈椎疼痛来自于脖子的位置歪了，回正之后，肩膀会放松下来。可能在跟熊旺子出门的那天有些身体姿势不正导致了这些后果。日后要特别注意。可能那天穿鞋穿的也不好，改变了脚步的感觉。',
+            title: '',
+            observation: ''
+        },
+        '2026-04-15': {
+            metrics: {
+                body_feel: 6.3,
+                completion: 6.5,
+                habit_guard: 7
+            },
+            notes: '今天更多的是进行放松，少工作，少坐着，保持心情愉快，同时尽量在生活中找到一些能够对自己颈椎发力有帮助的场景。',
+            title: '',
+            observation: 'AI治颈椎Day12｜放松也是一种努力'
+        },
+        '2026-04-16': {
+            metrics: {
+                body_feel: 6.1,
+                completion: 6.5,
+                habit_guard: 6.3
+            },
+            notes: '昨天回到家发现膝盖有点痛，可能跟最近调整走路姿势有关系。可能过于急于求成，和过于自信动作的正确性。',
+            title: '从刚到柔',
+            observation: 'AI治颈椎Day13｜从刚到柔'
+        },
+        '2026-04-17': {
+            metrics: {
+                body_feel: 5.8,
+                completion: 6,
+                habit_guard: 6.5
+            },
+            notes: '不舒服的一天，睡觉很难受。',
+            title: '慢就是快',
+            observation: 'AI治颈椎Day14｜慢就是快'
+        },
+        '2026-04-18': {
+            metrics: {
+                body_feel: 5.8,
+                completion: 6.8,
+                habit_guard: 6.5
+            },
+            notes: '适当的变化是生活的节奏，能够让身体的肌肉和运作产生意想不到的效果，当然这个效果持续性如何，还得继续验证',
+            title: '变换节奏',
+            observation: 'AI治颈椎Day15｜变换节奏'
+        },
+        '2026-04-19': {
+            metrics: {
+                body_feel: 6.8,
+                completion: 6,
+                habit_guard: 6.6
+            },
+            notes: '今天尝试了几个修正骨盆的动作，感觉有点变化。目前正在尝试更多动作的时期，让身体接受更多的刺激。',
+            title: '研究下骨盆',
+            observation: 'AI治颈椎Day16｜研究下骨盆'
+        },
+        '2026-04-20': {
+            metrics: {
+                body_feel: 6.8,
+                completion: 6.5,
+                habit_guard: 7
+            },
+            notes: '今天尝试了几个新的锻炼，比如拉单杠，打坐拉跨和蹬自行车。',
+            title: '新的锻炼',
+            observation: 'AI治颈椎Day17｜新的锻炼'
+        },
+        '2026-04-21': {
+            metrics: {
+                body_feel: 6.4,
+                completion: 6,
+                habit_guard: 6
+            },
+            notes: '今天因为要去线下办公，整体稍微会懈怠一些，但是可能因为各种原因吧，体感跟昨天差的不大，希望是锻炼起到了效果',
+            title: '继续打坐',
+            observation: 'AI治颈椎Day18｜继续打坐'
+        },
+        '2026-04-22': {
+            metrics: {
+                body_feel: 6.8,
+                completion: 6.5,
+                habit_guard: 6.5
+            },
+            notes: '做点日常的动作，拉单杠、抬头走路，看看能否大道至简',
+            title: '大道至简',
+            observation: 'AI治颈椎Day19｜大道至简'
+        },
+        '2026-04-24': {
+            metrics: {
+                body_feel: 6.5,
+                completion: 6,
+                habit_guard: 6
+            },
+            notes: '昨天忘记更新了，有点小懈怠。前天拉单杠之后的手臂和背部还在酸痛',
+            title: '肌肉酸痛',
+            observation: 'AI治疗颈椎20&21｜肌肉酸痛'
+        },
+        '2026-04-26': {
+            metrics: {
+                body_feel: 6.5,
+                completion: 7,
+                habit_guard: 6
+            },
+            notes: '这两天走路膝盖和脚踝总是有点痛，不知道跟我的姿势改变又没关系，继续观察，优先进行安全训练，拉单杠。',
+            title: '膝踝疼痛观察期',
+            observation: 'AI治颈椎Day22｜膝踝疼痛观察期'
+        },
+        '2026-04-27': {
+            metrics: {
+                body_feel: 6.8,
+                completion: 7,
+                habit_guard: 7
+            },
+            notes: '单杠+慢跑抬头+压腿看电视继续进行中，看能否大道至简。',
+            title: '大道至简实验',
+            observation: 'AI治颈椎Day23｜大道至简实验'
+        },
+        '2026-04-28': {
+            metrics: {
+                body_feel: 6.8,
+                completion: 7,
+                habit_guard: 7
+            },
+            notes: '练单杠手已经出了茧。单杠感觉还真不错，每次做的时候，做完是舒服的。慢跑抬头的体感也轻微变差，压腿也是，看来又得换新运动了，不能让它适应。\\nAI建议：\\n单杠继续保留（有效且体感好）。慢跑抬头和压腿需要换新刺激：\\n1. 替换慢跑抬头 → 后退走（倒着走，强迫重心后移+抬头）\\n2. 替换压腿 → 弓步拉伸+髋外旋（动态拉伸，避免静态适应）',
+            title: '适应性突破',
+            observation: 'AI治颈椎Day24｜适应性突破'
+        },
+        '2026-04-29': {
+            metrics: {
+                body_feel: 6.8,
+                completion: 7,
+                habit_guard: 6
+            },
+            notes: '继续维持之前的运动量，之所以给自己六分是因为经常低头玩手机，以及一些习惯还是不好\\nAI建议：\\n低头玩手机是成果流失的主要原因。建议：\\n1. 手机支架/抬高手机到视线水平（物理阻断低头）\\n2. 每30分钟做一次\"后退走10步+抬头看天\"（打断低头惯性）\\n3. 睡前最后一次单杠改到玩手机之后（抵消当天累积的低头伤害）',
+            title: '习惯管理',
+            observation: 'AI治颈椎Day25｜习惯管理'
+        },
+        '2026-04-30': {
+            metrics: {
+                body_feel: 6.7,
+                completion: 6.5,
+                habit_guard: 6
+            },
+            notes: '今天去办公室，穿的鞋子不舒服，坐着的时间比在家长。感觉得了足底筋膜炎，这肯定跟擅自更改走路姿势有关，需要特别注意。因为去单位的原因，昨天没有做引体的力量训练，只是吊了单杠。\\nAI建议：\\n1. 鞋子问题：办公室备一双舒适的鞋，避免不合脚的鞋加重足底负担\\n2. 足底筋膜炎警告：立即停止擅自改走路姿势的实验，回到之前验证过的安全模式（右脚后跟承重 + 避免前脚掌偷偷抢支撑）\\n3. 久坐对策：办公室每小时起身做 2 分钟站立修复动作，避免坐姿把训练成果消耗回去\\n4. 引体训练：吊单杠是好的，但如果条件允许，尽量补上引体向上的力量部分，保持肩颈稳定性',
+            title: '足底警告',
+            observation: 'AI治颈椎Day26｜足底警告'
+        },
+        '2026-05-01': {
+            metrics: {
+                body_feel: 6.7,
+                completion: 6.5,
+                habit_guard: 6
+            },
+            notes: '今天去到办公室，穿的鞋子不舒服，另外，坐着的时间会比在家长。同时我感觉我得了足底筋膜炎，这肯定是跟我擅自更改走路姿势有关，需要特别注意。因为去单位的原因，所以昨天没有做引体的力量训练，只是吊了单杠，所以给了这个分数\\nAI建议：\\n1. 立即停止自行调整步态，回归自然走路模式\\n2. 办公室环境对策：备一双舒适的鞋 + 每小时起身活动3-5分钟\\n3. 足底筋膜炎早期处理：睡前用网球滚足底，拉伸小腿\\n4. 力量训练补回来：吊单杠是好的，但尽量补上引体向上部分',
+            title: '足底警告',
+            observation: 'AI治颈椎Day27｜足底警告'
+        },
+        '2026-05-02': {
+            metrics: {
+                body_feel: 6.8,
+                completion: 7.5,
+                habit_guard: 6
+            },
+            notes: '今天给自己的完成度多打了一点分主要是拉伸这块做得还可以，并且能看到一点效果。昨天走路姿势主打恢复自然状态，可能对足底筋膜炎有一定的帮助。\\nAI建议：\\n1. 拉伸有效：继续保持当前拉伸强度和频率，既然能看到效果就说明方向对了\\n2. 走路姿势恢复自然：这是正确的策略，足底筋膜炎通常是过度干预导致的，自然状态反而是最安全的\\n3. 足底恢复观察：接下来几天重点观察足底疼痛是否减轻，如果持续改善就说明"恢复自然"是对的路径\\n4. 成果守住度6分：说明白天还是有消耗，继续注意办公室久坐和鞋子问题',
+            title: '拉伸见效',
+            observation: 'AI治颈椎Day28｜拉伸见效'
+        },
+        '2026-05-03': {
+            metrics: {
+                body_feel: 6.9,
+                completion: 6.8,
+                habit_guard: 6.7
+            },
+            notes: '足底筋膜炎的症状有所缓解，感觉自己还是不够努力和注意，每天在自我救赎和自我毁灭中徘徊。\\nAI建议：\\n1. 足底缓解是好信号：说明"恢复自然走路"的策略有效，继续保持\\n2. 把"够努力"具体化：明天开始记录一个最小康复动作（比如：起床后拉伸5分钟），完成就算达标，避免模糊的自我否定\\n3. 识别"自我毁灭"时刻：今晚或明天，记录一次具体的破坏性行为（什么时候、做了什么让成果消耗），才能针对性调整',
+            title: '在缓解与徘徊之间',
+            observation: 'AI治颈椎Day29｜在缓解与徘徊之间'
+        },
+        '2026-05-04': {
+            metrics: {
+                body_feel: 6.2,
+                completion: 6.5,
+                habit_guard: 6.2
+            },
+            notes: '昨天睡觉脖子很痛，已经有段时间没出现这个症状了。跟昨天只做了一次引体向上以及睡前没放松有关系，看来这些东西真的要坚持。\\nAI建议：\\n1. 引体向上频次不够 - 单次训练无法维持肌肉激活，建议恢复到每天至少2-3组的频率\\n2. 睡前放松是刚需 - 颈部肌肉紧张累积一天，睡前不放松直接导致夜间疼痛，这个环节不能省\\n3. 症状反弹是警告信号 - 说明当前康复状态还不稳定，一旦松懈就会回到原点，需要把这些动作变成日常习惯而不是任务',
+            title: '松懈的代价',
+            observation: 'AI治颈椎Day30｜松懈的代价'
+        },
+        '2026-05-05': {
+            metrics: {
+                body_feel: 6.5,
+                completion: 6.5,
+                habit_guard: 6.5
+            },
+            notes: '今天虽然还是进行了一些损伤身体的操作，但至少保证了拉了一次引体向上以及睡前进行了拉伸，效果立竿见影。\\nAI建议：\\n1. 损伤行为需要具体识别 - "损伤身体的操作"比较模糊，建议记录具体是什么动作或姿势，这样才能针对性改进\\n2. 引体向上+拉伸组合有效 - 既然体感立竿见影，说明这个组合抓住了关键，建议固化为每日必做项\\n3. 分数持平但体感好转 - 6.5分虽然不高，但"立竿见影"说明方向对了，继续保持这个节奏，分数会跟上来',
+            title: '引体+拉伸见效',
+            observation: 'AI治颈椎Day31｜引体+拉伸见效'
+        },
+        '2026-05-06': {
+            metrics: {
+                body_feel: 6.4,
+                completion: 6.5,
+                habit_guard: 6.4
+            },
+            notes: '昨天睡觉睡得很不好，不过早上强制让自己去身心放松休息，多睡了一会儿，我觉得感受会好一些，在恢复身体的时候，我觉得精神也要适量去放松这样的话身体的肌肉啊，然后各种关节可能才能真正意义上的放松下来。\\nAI建议：\\n1. 睡眠质量差时的补偿策略有效 - 早上多睡、强制放松是正确的应对，避免了硬推康复导致更大反弹\\n2. 精神放松是身体放松的前提 - 这是一个重要发现，肌肉和关节的真正放松需要精神层面配合，今后可以在康复前加入5分钟深呼吸或冥想\\n3. 今日建议降低强度 - 睡眠不足时，重点放在拉伸和放松类动作，避免高强度训练让身体更紧张',
+            title: '精神放松带动身体恢复',
+            observation: 'AI治颈椎Day32｜精神放松带动身体恢复'
+        },
+        '2026-05-07': {
+            metrics: {
+                body_feel: 6.3,
+                completion: 6.9,
+                habit_guard: 6.6
+            },
+            notes: '昨天又出现了这种早上脖子不舒服到睡不着觉的感觉真的有点难受，治疗颈椎真的有点进3退2的感觉。继续加油\\nAI建议：\\n1. 早醒疼痛需要排查睡眠环境 - 枕头高度、床垫软硬、睡姿习惯，这几次早上不舒服可能有共同触发因素\\n2. 进3退2是康复常态 - 不是线性进步，而是螺旋上升，关键是找到\"退2\"的规律，避免重复触发\\n3. 完成度6.9是近期高点 - 说明执行力在提升，体感波动不代表努力白费，坚持下去身体会跟上节奏',
+            title: '进3退2的螺旋',
+            observation: 'AI治颈椎Day33｜进3退2的螺旋'
+        },
+        '2026-05-08': {
+            metrics: {
+                body_feel: 6.6,
+                completion: 6.8,
+                habit_guard: 6.8
+            },
+            notes: '今天给我的整体打分高了一点，主要是我在去单位的时候利用中午的间隙去拉伸了一下，我觉得还是有点效果，同时我在睡前一直在进行拉伸，虽然目前我的脖子感觉出现了那种颈椎病的症状，这种症状是不时会出现的，出现的时候就会怎么弄都不舒服，但是呢，我通过坐在地上进行头部放松，以及就是侧着头歪着头看电视，让我的颈椎在睡前达到了放松的一个状态，然后还发现了一个很搞笑的事情，就是每一次颈椎出现问题，我都能发现一些新的有效的缓解的方法，每次还都不一样，感觉这个颈椎真的是太多变了，你需要在每次出现问题的时候，不能用同一种方法\\nAI建议：\\n1. 中午间隙拉伸有效 - 办公室环境下利用碎片时间做拉伸是可持续的策略，建议固化为每天中午必做项\\n2. 多姿势组合放松 - 坐地头部放松+侧头看电视的组合说明颈椎需要多角度刺激才能真正放松，单一姿势容易适应失效\\n3. "每次都有新方法"是重要发现 - 颈椎问题的多变性要求你保持灵活应对而非固守单一方案，建议记录每次有效的新方法形成"工具箱"\\n4. 症状出现时的应对策略 - 当不适出现时，优先尝试最近验证有效的2-3种方法，而不是重复用过去失效的老方法',
+            title: '每次都有新方法',
+            observation: 'AI治颈椎Day34｜每次都有新方法'
+        },
+        '2026-05-09': {
+            metrics: {
+                body_feel: 6,
+                completion: 7,
+                habit_guard: 6.5
+            },
+            notes: '昨天又是睡觉没睡好的一天，我有一个怀疑就是说我可能有时候把这个颈椎过度了，然后呢，比如睡觉啊，或者说看电视看电脑的时候不良的姿势再回去，那这个过程中可能会产生摩擦，然后会导致局部发炎，那样的话可能会导致就是会更不好，就是我的一个理论，所以就是可能也要注意不要过度地去恢复这个生理曲度吧，毕竟这个东西不是一天两天能恢复的，还是应该有一些耐心，除非就是能够尽量长时间地去保持一个位置那样，我觉得是好的，我就在考虑怎么样去长时间地保持生理曲度恢复正常，而不是一不注意就缩回去，导致磨损更严重，同时之后我的打分逻辑也会发生些变化，我会尽量打一些整数的分，如果没有整数的分呢，我就打6.5 7.5这样，这样可以把我的数据变化显示得更明确一点\\nAI建议：\\n1. 过度康复+姿势回弹=反复摩擦发炎 - 这是关键发现，短时间强制矫正后肌肉疲劳，放松时姿势崩塌更严重\\n2. 降低单次强度，提高频率 - 不要一次性\"掰正\"颈椎，改成每小时轻微调整，让肌肉记住正确位置\\n3. 睡眠姿势固定 - 枕头高度必须精确（颈椎自然曲度），考虑颈托或定型枕，侧睡时肩膀和头部对齐\\n4. 肌肉耐力训练优先于矫正 - 颈部深层肌肉需要主动训练才能\"记住\"正确姿势，单纯被动矫正会反弹',
+            title: '避免过度康复与姿势保持',
+            observation: 'AI治颈椎Day35｜避免过度康复与姿势保持'
+        },
+        '2026-05-10': {
+            metrics: {
+                body_feel: 6.5,
+                completion: 6.5,
+                habit_guard: 7
+            },
+            notes: '昨天我的病稍微有一点好转，去了一个教堂活动里面的人帮我祈祷了一下，虽然我目前还不是说特别相信这个的功效，但是呢，事实上是好了一点，但我把这个原因归结为他，其实很多程度上也是也该好了，不过这里头有一个点，我想说就是信念的力量，很多人在做康复的时候，因为病情比较重，所以可能已经放弃了，或者觉得只能少数了，但是我想说如果我们相信他能好坚持下去，我觉得大概率还是有很多康复的可能性的，所以一起加油吧\\nAI建议：\\n1. 信念本身就是治疗的一部分 - 神经可塑性和自主神经调节需要\"相信会好转\"作为基础，这不是玄学而是生理机制\\n2. 保持理性归因+积极信念的平衡 - 你现在的状态很健康：既不盲信也不否定，这种心态最利于康复\\n3. 避免因短期波动动摇 - 康复不是线性的，一两天的起伏不代表方向错误，坚持当前节奏\\n4. 信念需要行动支撑 - 单纯相信不够，持续执行训练+观察反馈才能把信念转化为真实改善',
+            title: '信念的力量',
+            observation: 'AI治颈椎Day36｜信念的力量'
+        },
+        '2026-05-11': {
+            metrics: {
+                body_feel: 6.5,
+                completion: 7,
+                habit_guard: 6
+            },
+            notes: '继续坚定信念，我一定能治好我的颈椎，但是现在遇到的问题是全天还是恢复的时间远远的小于消耗的时间这个问题，我目前的思路是在睡觉的时候在这个这个腰，或者说后背下面垫一个枕头让这然后呢，头不枕枕头，这样让睡觉的这个大部分时间吧，至少来说对颈椎不要太多的压力，另外呢，就是可能除了这个刚性的这种拉伸啊，然后包括引体向上应该加一些这种比较随意的一些举动不要让他太有规律，在动态之中去治疗，他可能效果会更好，我认为这个很多的问题都来自于每次总是做相同的动作，比如拿手机，比如看电脑，比如看电视，我觉得核心还是让他处在一个不要长时间维持在一个动作的这种环境下会对他恢复更有利\\nAI建议：\\n1. 睡眠姿势实验值得试，但要观察是否影响睡眠质量本身（睡不好反而影响恢复）\\n2. 动态随机化思路对，核心是打破重复性损伤模式 — 但要确保"随意动作"不是乱动，而是有意识的多角度活动\\n3. 你说的"恢复时间 < 消耗时间"是关键瓶颈，需要从两端同时推进：减少消耗（工作/娱乐时的姿势管理）+ 增加恢复（睡眠、拉伸、动态活动）\\n4. 建议白天工作时设置提醒（每30分钟），做10秒随机颈部/肩部活动（不是固定动作，而是随意转动、耸肩、后仰等）',
+            title: '动态对抗静态损伤',
+            observation: 'AI治颈椎Day37｜动态对抗静态损伤'
+        }
+    };
+
+    const storedVersion = Number(localStorage.getItem('healthDataVersion') || '0');
+    const legacyData = localStorage.getItem('healthProgress');
+
+    if (legacyData && storedVersion !== DATA_VERSION) {
+        localStorage.removeItem('healthProgress');
+        localStorage.setItem('healthDataVersion', String(DATA_VERSION));
+    }
+
+    progressData = defaultData;
+}
+
 function renderTodayTasks() {
     const today = new Date();
     const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    
-    document.getElementById('todayDate').textContent = `(${dateStr})`;
-    
     const dayData = progressData[dateStr];
-    if (dayData) {
-        // 更新完成率
-        const rate = Math.round((dayData.completed.length / 6) * 100);
-        document.getElementById('completionRate').textContent = `${rate}%`;
-        
-        // 计算总时长
-        const durations = [15, 10, 15, 10, 20, 15];
-        let completed = 0;
-        dayData.completed.forEach(task => {
-            const index = ['morning', 'midmorning', 'noon', 'afternoon', 'evening', 'bedtime'].indexOf(task);
-            if (index >= 0) completed += durations[index];
-        });
-        document.getElementById('totalDuration').textContent = `${completed}/85分钟`;
-        
-        // 加载笔记和指标
-        if (dayData.notes) {
-            document.getElementById('todayNotes').value = dayData.notes;
-        }
-        if (dayData.metrics) {
-            Object.keys(dayData.metrics).forEach(key => {
-                const input = document.getElementById(key);
-                if (input) input.value = dayData.metrics[key];
-            });
-        }
-    }
+    if (!dayData) return;
 }
 
-// 渲染趋势图
-function renderChart() {
-    const ctx = document.getElementById('progressChart').getContext('2d');
+function getFilteredDates(rangeDays) {
+    const allDates = Object.keys(progressData).sort();
+    if (allDates.length === 0) return [];
+
+    const latest = new Date(allDates[allDates.length - 1]);
+    const start = new Date(latest);
+    start.setDate(start.getDate() - (rangeDays - 1));
+
+    return allDates.filter(date => new Date(date) >= start);
+}
+
+function mapScore(value) {
+    if (value === null || value === undefined) return null;
+    const clamped = Math.max(0, Math.min(10, value));
+    const lower = Math.floor(clamped);
+    if (lower >= 10) return 1;
+    const fraction = clamped - lower;
+    const start = SCORE_BREAKS[lower];
+    const end = SCORE_BREAKS[lower + 1];
+    return start + (end - start) * fraction;
+}
+
+function unmapScore(value) {
+    const clamped = Math.max(0, Math.min(1, value));
+    for (let i = 0; i < SCORE_BREAKS.length - 1; i++) {
+        const start = SCORE_BREAKS[i];
+        const end = SCORE_BREAKS[i + 1];
+        if (clamped <= end || i === SCORE_BREAKS.length - 2) {
+            const ratio = end === start ? 0 : (clamped - start) / (end - start);
+            return i + ratio;
+        }
+    }
+    return 10;
+}
+
+const nonlinearBackgroundPlugin = {
+    id: 'nonlinearBackgroundPlugin',
+    beforeDraw(chart) {
+        const { ctx, chartArea, scales } = chart;
+        if (!chartArea || !scales?.y) return;
+
+        const yScale = scales.y;
+        const score5Y = yScale.getPixelForValue(mapScore(5));
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.05)';
+        ctx.fillRect(chartArea.left, score5Y, chartArea.right - chartArea.left, chartArea.bottom - score5Y);
+
+        ctx.strokeStyle = 'rgba(68, 83, 166, 0.16)';
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.moveTo(chartArea.left, score5Y);
+        ctx.lineTo(chartArea.right, score5Y);
+        ctx.stroke();
+        ctx.restore();
+    }
+};
+
+function renderChart(rangeDays = 7) {
+    const canvas = document.getElementById('progressChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const dates = getFilteredDates(rangeDays);
+    const labels = dates.map(d => d.substring(5));
     
-    // 获取最近4周的数据
-    const dates = Object.keys(progressData).sort().slice(-28);
-    const labels = dates.map(d => d.substring(5)); // MM-DD
-    
+    // Update daily title and observation
+    updateDailyInfo(dates);
+
     const datasets = [
         {
-            label: '右脚踝活动度',
-            data: dates.map(d => progressData[d]?.metrics?.ankle_mobility || null),
-            borderColor: '#4CAF50',
-            backgroundColor: 'rgba(76, 175, 80, 0.1)',
-            tension: 0.4
+            label: '整体体感',
+            data: dates.map(d => mapScore(progressData[d]?.metrics?.body_feel ?? null)),
+            rawData: dates.map(d => progressData[d]?.metrics?.body_feel ?? null),
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            spanGaps: false,
+            tension: 0.35,
+            pointRadius: 6,
+            pointHoverRadius: 8,
+            borderWidth: 3.2,
+            pointBackgroundColor: '#10b981',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+            pointHoverBackgroundColor: '#10b981',
+            pointHoverBorderColor: '#fff',
+            pointHoverBorderWidth: 3
         },
         {
-            label: '右脚单腿站(秒)',
-            data: dates.map(d => progressData[d]?.metrics?.ankle_stability || null),
-            borderColor: '#2196F3',
-            backgroundColor: 'rgba(33, 150, 243, 0.1)',
-            tension: 0.4,
-            yAxisID: 'y1'
+            label: '完成度',
+            data: dates.map(d => mapScore(progressData[d]?.metrics?.completion ?? null)),
+            rawData: dates.map(d => progressData[d]?.metrics?.completion ?? null),
+            borderColor: '#ef4444',
+            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+            spanGaps: false,
+            tension: 0.35,
+            pointRadius: 6,
+            pointHoverRadius: 8,
+            borderWidth: 3.2,
+            pointBackgroundColor: '#ef4444',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+            pointHoverBackgroundColor: '#ef4444',
+            pointHoverBorderColor: '#fff',
+            pointHoverBorderWidth: 3
         },
         {
-            label: '右脚承重感',
-            data: dates.map(d => progressData[d]?.metrics?.weight_balance || null),
-            borderColor: '#FF9800',
-            backgroundColor: 'rgba(255, 152, 0, 0.1)',
-            tension: 0.4
-        },
-        {
-            label: '右髋游离感(反)',
-            data: dates.map(d => progressData[d]?.metrics?.hip_stability ? 10 - progressData[d].metrics.hip_stability : null),
-            borderColor: '#9C27B0',
-            backgroundColor: 'rgba(156, 39, 176, 0.1)',
-            tension: 0.4
-        },
-        {
-            label: '左腰紧张(反)',
-            data: dates.map(d => progressData[d]?.metrics?.lower_back_tension ? 10 - progressData[d].metrics.lower_back_tension : null),
-            borderColor: '#F44336',
-            backgroundColor: 'rgba(244, 67, 54, 0.1)',
-            tension: 0.4
-        },
-        {
-            label: '右肩疼痛(反)',
-            data: dates.map(d => progressData[d]?.metrics?.shoulder_pain ? 10 - progressData[d].metrics.shoulder_pain : null),
-            borderColor: '#E91E63',
-            backgroundColor: 'rgba(233, 30, 99, 0.1)',
-            tension: 0.4
+            label: '日常注意度',
+            data: dates.map(d => mapScore(progressData[d]?.metrics?.habit_guard ?? null)),
+            rawData: dates.map(d => progressData[d]?.metrics?.habit_guard ?? null),
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            spanGaps: false,
+            tension: 0.35,
+            pointRadius: 6,
+            pointHoverRadius: 8,
+            borderWidth: 3.2,
+            pointBackgroundColor: '#3b82f6',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+            pointHoverBackgroundColor: '#3b82f6',
+            pointHoverBorderColor: '#fff',
+            pointHoverBorderWidth: 3
         }
     ];
-    
-    new Chart(ctx, {
+
+    if (progressChart) progressChart.destroy();
+    progressChart = new Chart(ctx, {
         type: 'line',
-        data: {
-            labels: labels,
-            datasets: datasets
-        },
+        data: { labels, datasets },
+        plugins: [nonlinearBackgroundPlugin],
         options: {
             responsive: true,
-            maintainAspectRatio: true,
-            interaction: {
-                mode: 'index',
-                intersect: false,
-            },
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false, axis: 'x' },
+            hover: { mode: 'index', intersect: false, axis: 'x' },
+            layout: { padding: { top: 6, right: 8, bottom: 0, left: 0 } },
             scales: {
+                x: {
+                    grid: { color: 'rgba(102,112,133,0.06)' },
+                    ticks: { color: '#667085', maxRotation: 0, autoSkip: true }
+                },
                 y: {
                     type: 'linear',
                     display: true,
                     position: 'left',
                     min: 0,
-                    max: 10,
-                    title: {
-                        display: true,
-                        text: '评分 (1-10)'
-                    }
-                },
-                y1: {
-                    type: 'linear',
-                    display: true,
-                    position: 'right',
-                    min: 0,
-                    max: 60,
-                    title: {
-                        display: true,
-                        text: '秒数'
+                    max: 1,
+                    afterBuildTicks(scale) {
+                        scale.ticks = Array.from({ length: 11 }, (_, i) => ({ value: mapScore(i) }));
                     },
+                    ticks: {
+                        color: '#667085',
+                        callback(value) {
+                            return String(Math.round(unmapScore(value)));
+                        }
+                    },
+                    title: { display: true, text: '评分', color: '#667085', font: { size: 11 } },
                     grid: {
-                        drawOnChartArea: false,
+                        color(context) {
+                            const v = context.tick?.value;
+                            if (v === undefined) return 'rgba(102,112,133,0.06)';
+                            const raw = Math.round(unmapScore(v));
+                            if (raw === 5) return 'rgba(68, 83, 166, 0.16)';
+                            return 'rgba(102,112,133,0.06)';
+                        },
+                        lineWidth(context) {
+                            const v = context.tick?.value;
+                            if (v === undefined) return 1;
+                            const raw = Math.round(unmapScore(v));
+                            return raw === 5 ? 1.1 : 1;
+                        }
                     }
                 }
             },
             plugins: {
-                legend: {
-                    display: false
-                },
+                legend: { display: false },
                 tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    axis: 'x',
+                    filter: () => true,
+                    itemSort: (a, b) => a.datasetIndex - b.datasetIndex,
                     callbacks: {
-                        label: function(context) {
+                        label(context) {
                             let label = context.dataset.label || '';
-                            if (label) {
-                                label += ': ';
-                            }
-                            if (context.parsed.y !== null) {
-                                label += context.parsed.y;
-                                if (context.datasetIndex === 1) {
-                                    label += '秒';
-                                } else {
-                                    label += '分';
-                                }
+                            if (label) label += ': ';
+                            const rawValue = context.dataset.rawData?.[context.dataIndex];
+                            if (rawValue !== null && rawValue !== undefined) {
+                                label += rawValue + '分';
                             }
                             return label;
+                        },
+                        afterBody(tooltipItems) {
+                            if (tooltipItems.length === 0) return [];
+                            const dateIndex = tooltipItems[0].dataIndex;
+                            const dates = getFilteredDates(currentRangeDays);
+                            const dateStr = dates[dateIndex];
+                            const dayData = progressData[dateStr];
+                            if (dayData?.notes && dayData.notes !== '无') {
+                                const lines = dayData.notes.split('\n');
+                                return ['\n备注: ', ...lines];
+                            }
+                            return [];
                         }
                     }
                 }
             }
         }
     });
+    window.progressChart = progressChart;
 }
 
-// 渲染历史记录
-function renderHistory() {
-    const list = document.getElementById('historyList');
-    list.innerHTML = '';
+function updateDailyInfo(dates) {
+    if (dates.length === 0) return;
     
-    const dates = Object.keys(progressData).sort().reverse().slice(0, 10);
+    const latestDate = dates[dates.length - 1];
+    const dayData = progressData[latestDate];
     
-    if (dates.length === 0) {
-        list.innerHTML = '<p style="text-align: center; color: #999;">暂无历史记录</p>';
-        return;
+    const titleMainEl = document.querySelector('.title-main');
+    const titleSubtitleEl = document.querySelector('.title-subtitle');
+    const observationContentEl = document.querySelector('.observation-content');
+    
+    // 解析observation字段，格式：AI治颈椎Day12｜放松也是一种努力
+    if (dayData?.observation) {
+        const parts = dayData.observation.split('｜');
+        if (parts.length === 2) {
+            // 第一行：📈 + Day编号
+            if (titleMainEl) {
+                titleMainEl.textContent = '📈 ' + parts[0].trim();
+            }
+            // 第二行：主题副标题（加双引号）
+            if (titleSubtitleEl) {
+                titleSubtitleEl.textContent = '"' + parts[1].trim() + '"';
+            }
+        } else {
+            // 如果格式不对，全部显示在第一行
+            if (titleMainEl) {
+                titleMainEl.textContent = '📈 ' + dayData.observation;
+            }
+            if (titleSubtitleEl) {
+                titleSubtitleEl.textContent = '';
+            }
+        }
+    } else {
+        // 没有observation数据时显示默认
+        if (titleMainEl) {
+            titleMainEl.textContent = '📈 今日观察';
+        }
+        if (titleSubtitleEl) {
+            titleSubtitleEl.textContent = '';
+        }
     }
     
-    dates.forEach(date => {
-        const data = progressData[date];
-        const item = document.createElement('div');
-        item.className = 'history-item';
-        
-        const rate = data.completed.length / 6;
-        const badgeClass = rate === 1 ? 'full' : 'partial';
-        const badgeText = rate === 1 ? '全部完成' : `${data.completed.length}/6`;
-        
-        item.innerHTML = `
-            <div class="date">
-                ${date}
-                <span class="completion-badge ${badgeClass}">${badgeText}</span>
-            </div>
-            <div class="notes">${data.notes || '无笔记'}</div>
-        `;
-        
-        item.addEventListener('click', () => showDayDetail(date));
-        list.appendChild(item);
-    });
+    if (observationContentEl) {
+        if (dayData?.notes) {
+            observationContentEl.innerHTML = dayData.notes.replace(/\\n/g, '<br>');
+        } else {
+            observationContentEl.textContent = '今日无';
+        }
+    }
 }
 
-// 保存今日记录
-function saveToday() {
-    const today = new Date();
-    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    
-    // 获取当前数据或创建新的
-    if (!progressData[dateStr]) {
-        progressData[dateStr] = {
-            completed: [],
-            skipped: [],
-            metrics: {},
-            notes: ''
-        };
+function updateCurrentDate() {
+    const dateEl = document.getElementById('currentDate');
+    if (dateEl) {
+        const now = new Date();
+        const month = now.getMonth() + 1;
+        const day = now.getDate();
+        dateEl.textContent = `${month}月${day}日`;
     }
-    
-    // 保存笔记
-    progressData[dateStr].notes = document.getElementById('todayNotes').value;
-    
-    // 保存指标
-    progressData[dateStr].metrics = {
-        ankle_mobility: parseInt(document.getElementById('ankle_mobility').value),
-        ankle_stability: parseInt(document.getElementById('ankle_stability').value),
-        weight_balance: parseInt(document.getElementById('weight_balance').value),
-        hip_stability: parseInt(document.getElementById('hip_stability').value),
-        lower_back_tension: parseInt(document.getElementById('lower_back_tension').value),
-        shoulder_pain: parseInt(document.getElementById('shoulder_pain').value)
-    };
-    
-    saveData();
-    
-    // 重新渲染
-    renderCalendar();
-    renderChart();
-    renderHistory();
-    
-    alert('✅ 保存成功！');
-}
-
-// 显示某天详情
-function showDayDetail(dateStr) {
-    const data = progressData[dateStr];
-    if (!data) {
-        alert('该日期暂无记录');
-        return;
-    }
-    
-    const rate = Math.round((data.completed.length / 6) * 100);
-    const metrics = data.metrics || {};
-    
-    const detail = `
-📅 ${dateStr}
-
-✅ 完成率：${rate}% (${data.completed.length}/6)
-
-📊 指标：
-• 右脚踝活动度：${metrics.ankle_mobility || '-'}/10
-• 右脚单腿站：${metrics.ankle_stability || '-'}秒
-• 右脚承重感：${metrics.weight_balance || '-'}/10
-• 右髋游离感：${metrics.hip_stability || '-'}/10
-• 左腰紧张：${metrics.lower_back_tension || '-'}/10
-• 右肩疼痛：${metrics.shoulder_pain || '-'}/10
-
-📝 笔记：
-${data.notes || '无'}
-    `;
-    
-    alert(detail);
 }
